@@ -168,7 +168,7 @@ const checkBirthdays = async () => {
 
     for (const row of res.rows) {
       const mention = `<@${row.user_id}>`;
-      channel.send(`Happy birthday ${mention}! 🎉`);
+      channel.send(`Happy birthday ${mention}! `);
     }
   } catch {
     console.error('error');
