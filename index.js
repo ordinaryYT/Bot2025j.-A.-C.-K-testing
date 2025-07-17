@@ -53,7 +53,7 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
     .setName('modifyrole')
-    .setDescription('Add or remove a role from a user by ID')
+    .setDescription('Add or remove a role from a user')
     .addStringOption(option =>
       option.setName('action')
         .setDescription('add/remove')
