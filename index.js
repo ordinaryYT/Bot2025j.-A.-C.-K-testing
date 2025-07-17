@@ -1,13 +1,24 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, Events, Partials } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  PermissionFlagsBits,
+  Events,
+  Partials
+} = require('discord.js');
 const express = require('express');
 const { Pool } = require('pg');
 
+// Express setup
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_, res) => res.send('Bot is running.'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
+// PostgreSQL setup
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -27,6 +38,7 @@ const pool = new Pool({
   }
 })();
 
+// Discord client setup
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -38,54 +50,63 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
+// Slash command definitions
+const setBirthdayCommand = new SlashCommandBuilder()
+  .setName('setbirthday')
+  .setDescription('Set your birthday')
+  .addStringOption(option =>
+    option.setName('date')
+      .setDescription('Birthday (YYYY-MM-DD)')
+      .setRequired(true)
+  );
+
+const clearChannelCommand = new SlashCommandBuilder()
+  .setName('clearchannel')
+  .setDescription('Clear messages in this channel')
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+
+const modifyRoleCommand = new SlashCommandBuilder()
+  .setName('modifyrole')
+  .setDescription('Add or remove a role from a user by ID')
+  .addStringOption(option =>
+    option.setName('action')
+      .setDescription('add/remove')
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName('userid')
+      .setDescription('Target User ID')
+      .setRequired(true)
+  )
+  .addStringOption(option =>
+    option.setName('roleid')
+      .setDescription('Role ID')
+      .setRequired(true)
+  )
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+
 const commands = [
-  new SlashCommandBuilder()
-    .setName('setbirthday')
-    .setDescription('Set your birthday')
-    .addStringOption(option =>
-      option.setName('date')
-        .setDescription('Birthday (YYYY-MM-DD)')
-        .setRequired(true)
-    ),
-  new SlashCommandBuilder()
-    .setName('clearchannel')
-    .setDescription('Clear messages in this channel')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder()
-    .setName('modifyrole')
-    .setDescription('Add or remove a role from a user by ID')
-    .addStringOption(option =>
-      option.setName('action')
-        .setDescription('add/remove')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('userid')
-        .setDescription('Target User ID')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option.setName('roleid')
-        .setDescription('Role ID')
-        .setRequired(true)
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  setBirthdayCommand,
+  clearChannelCommand,
+  modifyRoleCommand
 ].map(cmd => cmd.toJSON());
 
+// Register slash commands
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
+    console.log('Registering slash commands...');
     await rest.put(
       Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
       { body: commands }
     );
-    console.log("Slash commands registered.");
+    console.log('Slash commands registered.');
   } catch (err) {
-    console.error("Failed to register commands:", err);
+    console.error("Failed to register commands:", err.message);
   }
 })();
 
-// --- Slash Command Handler ---
+// Handle slash command interactions
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -94,12 +115,12 @@ client.on('interactionCreate', async interaction => {
     const requiredRoleId = process.env.BIRTHDAY_ROLE_ID;
 
     if (!member.roles.cache.has(requiredRoleId)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'You need the birthday role to set your birthday.', ephemeral: true });
     }
 
     const dateInput = interaction.options.getString('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'Date format must be YYYY-MM-DD.', ephemeral: true });
     }
 
     try {
@@ -111,13 +132,13 @@ client.on('interactionCreate', async interaction => {
       );
       await interaction.reply(`Birthday saved: ${dateInput}`);
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Database error. Try again later.', ephemeral: true });
     }
   }
 
   if (interaction.commandName === 'clearchannel') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'You don’t have permission to do this.', ephemeral: true });
     }
 
     try {
@@ -125,7 +146,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.channel.bulkDelete(messages, true);
       await interaction.reply({ content: 'Messages deleted.', ephemeral: true });
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Failed to delete messages.', ephemeral: true });
     }
   }
 
@@ -143,15 +164,15 @@ client.on('interactionCreate', async interaction => {
         await member.roles.remove(roleId);
         await interaction.reply(`Removed role from <@${userId}>`);
       } else {
-        await interaction.reply({ content: 'error', ephemeral: true });
+        await interaction.reply({ content: 'Action must be add or remove.', ephemeral: true });
       }
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Failed to modify role.', ephemeral: true });
     }
   }
 });
 
-// --- Birthday Check ---
+// Birthday check
 const checkBirthdays = async () => {
   const today = new Date().toISOString().slice(5, 10); // MM-DD
 
@@ -171,11 +192,11 @@ const checkBirthdays = async () => {
       channel.send(`Happy birthday ${mention}! 🎉`);
     }
   } catch {
-    console.error('error');
+    console.error('Birthday check failed.');
   }
 };
 
-// --- Reaction Roles ---
+// Reaction roles
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (reaction.partial) await reaction.fetch();
   const roleMap = {
@@ -202,7 +223,7 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
   member.roles.remove(roleId).catch(() => {});
 });
 
-// --- Welcome Message ---
+// Welcome message
 client.on(Events.GuildMemberAdd, async member => {
   const channel = await client.channels.fetch(process.env.WELCOME_CHANNEL_ID);
   if (channel && channel.isTextBased()) {
@@ -210,7 +231,7 @@ client.on(Events.GuildMemberAdd, async member => {
   }
 });
 
-// --- Bot Ready ---
+// Bot ready
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   checkBirthdays();
