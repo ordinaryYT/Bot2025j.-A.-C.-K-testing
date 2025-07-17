@@ -1,21 +1,18 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, Events, Partials } = require('discord.js');
 const express = require('express');
 const { Pool } = require('pg');
 
-// --- Express keep-alive server for Render ---
 const app = express();
 const PORT = process.env.PORT || 3000;
 app.get('/', (_, res) => res.send('Bot is running.'));
 app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
 
-// --- PostgreSQL (RenderSQL) ---
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false } // Required for Render
+  ssl: { rejectUnauthorized: false }
 });
 
-// Create birthdays table if it doesn't exist
 (async () => {
   try {
     await pool.query(`
@@ -30,22 +27,51 @@ const pool = new Pool({
   }
 })();
 
-// --- Discord Bot Client ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+});
 
-// --- Slash Command: /setbirthday ---
 const commands = [
   new SlashCommandBuilder()
     .setName('setbirthday')
-    .setDescription('Set a user\'s birthday')
+    .setDescription('Set your birthday')
     .addStringOption(option =>
       option.setName('date')
-        .setDescription('Your birthday (YYYY-MM-DD)')
+        .setDescription('Birthday (YYYY-MM-DD)')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('clearchannel')
+    .setDescription('Clear messages in this channel')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName('modifyrole')
+    .setDescription('Add or remove a role from a user by ID')
+    .addStringOption(option =>
+      option.setName('action')
+        .setDescription('add/remove')
         .setRequired(true)
     )
+    .addStringOption(option =>
+      option.setName('userid')
+        .setDescription('Target User ID')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('roleid')
+        .setDescription('Role ID')
+        .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
-// Register slash command
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 (async () => {
   try {
@@ -59,7 +85,7 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   }
 })();
 
-// --- Slash Command Logic ---
+// --- Slash Command Handler ---
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -68,18 +94,12 @@ client.on('interactionCreate', async interaction => {
     const requiredRoleId = process.env.BIRTHDAY_ROLE_ID;
 
     if (!member.roles.cache.has(requiredRoleId)) {
-      return interaction.reply({
-        content: 'You do not have permission.',
-        ephemeral: true
-      });
+      return interaction.reply({ content: 'error', ephemeral: true });
     }
 
     const dateInput = interaction.options.getString('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return interaction.reply({
-        content: 'Invalid date format. Please use YYYY-MM-DD.',
-        ephemeral: true
-      });
+      return interaction.reply({ content: 'error', ephemeral: true });
     }
 
     try {
@@ -90,17 +110,48 @@ client.on('interactionCreate', async interaction => {
         [interaction.user.id, dateInput]
       );
       await interaction.reply(`Birthday saved: ${dateInput}`);
-    } catch (err) {
-      console.error("Error saving birthday:", err);
-      await interaction.reply({
-        content: 'error saving birthday.',
-        ephemeral: true
-      });
+    } catch {
+      await interaction.reply({ content: 'error', ephemeral: true });
+    }
+  }
+
+  if (interaction.commandName === 'clearchannel') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: 'error', ephemeral: true });
+    }
+
+    try {
+      const messages = await interaction.channel.messages.fetch({ limit: 100 });
+      await interaction.channel.bulkDelete(messages, true);
+      await interaction.reply({ content: 'Messages deleted.', ephemeral: true });
+    } catch {
+      await interaction.reply({ content: 'error', ephemeral: true });
+    }
+  }
+
+  if (interaction.commandName === 'modifyrole') {
+    const action = interaction.options.getString('action');
+    const userId = interaction.options.getString('userid');
+    const roleId = interaction.options.getString('roleid');
+
+    try {
+      const member = await interaction.guild.members.fetch(userId);
+      if (action === 'add') {
+        await member.roles.add(roleId);
+        await interaction.reply(`Added role to <@${userId}>`);
+      } else if (action === 'remove') {
+        await member.roles.remove(roleId);
+        await interaction.reply(`Removed role from <@${userId}>`);
+      } else {
+        await interaction.reply({ content: 'error', ephemeral: true });
+      }
+    } catch {
+      await interaction.reply({ content: 'error', ephemeral: true });
     }
   }
 });
 
-// --- Birthday Checker ---
+// --- Birthday Check ---
 const checkBirthdays = async () => {
   const today = new Date().toISOString().slice(5, 10); // MM-DD
 
@@ -113,21 +164,53 @@ const checkBirthdays = async () => {
     if (res.rows.length === 0) return;
 
     const channel = await client.channels.fetch(process.env.BIRTHDAY_CHANNEL_ID);
-    if (!channel || !channel.isTextBased()) {
-      console.error('Birthday channel not found .');
-      return;
-    }
+    if (!channel || !channel.isTextBased()) return;
 
     for (const row of res.rows) {
       const mention = `<@${row.user_id}>`;
-      channel.send(`Happy birthday ${mention}!`);
+      channel.send(`Happy birthday ${mention}! 🎉`);
     }
-  } catch (err) {
-    console.error('Error checking birthdays:', err);
+  } catch {
+    console.error('error');
   }
 };
 
-// --- Schedule Birthday Check ---
+// --- Reaction Roles ---
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+  const roleMap = {
+    '✅': 'ROLE_ID_1',
+    '❌': 'ROLE_ID_2'
+  };
+  const roleId = roleMap[reaction.emoji.name];
+  if (!roleId) return;
+
+  const member = await reaction.message.guild.members.fetch(user.id);
+  member.roles.add(roleId).catch(() => {});
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+  const roleMap = {
+    '✅': 'ROLE_ID_1',
+    '❌': 'ROLE_ID_2'
+  };
+  const roleId = roleMap[reaction.emoji.name];
+  if (!roleId) return;
+
+  const member = await reaction.message.guild.members.fetch(user.id);
+  member.roles.remove(roleId).catch(() => {});
+});
+
+// --- Welcome Message ---
+client.on(Events.GuildMemberAdd, async member => {
+  const channel = await client.channels.fetch(process.env.WELCOME_CHANNEL_ID);
+  if (channel && channel.isTextBased()) {
+    channel.send(`Welcome to the server, <@${member.id}>! 🎉`);
+  }
+});
+
+// --- Bot Ready ---
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
   checkBirthdays();
@@ -140,10 +223,9 @@ client.on('ready', () => {
   ).getTime() - now.getTime();
 
   setTimeout(() => {
-    checkBirthdays(); // Run first time at midnight
-    setInterval(checkBirthdays, 24 * 60 * 60 * 1000); // Every 24 hours
+    checkBirthdays();
+    setInterval(checkBirthdays, 24 * 60 * 60 * 1000);
   }, millisUntilMidnight);
 });
 
-// --- Start Bot ---
 client.login(process.env.DISCORD_TOKEN);
