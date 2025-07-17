@@ -69,7 +69,55 @@ const commands = [
         .setDescription('Role ID')
         .setRequired(true)
     )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName('memberroles')
+    .setDescription('Create a reaction role message with custom emojis and roles')
+    .addStringOption(option =>
+      option.setName('text')
+        .setDescription('Custom text for the message')
+        .setRequired(false)
+    )
+    .addStringOption(option =>
+      option.setName('emoji1')
+        .setDescription('Emoji for option 1')
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option.setName('role1')
+        .setDescription('Role for option 1')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('emoji2')
+        .setDescription('Emoji for option 2')
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option.setName('role2')
+        .setDescription('Role for option 2')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('emoji3')
+        .setDescription('Emoji for option 3')
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option.setName('role3')
+        .setDescription('Role for option 3')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('emoji4')
+        .setDescription('Emoji for option 4')
+        .setRequired(true)
+    )
+    .addRoleOption(option =>
+      option.setName('role4')
+        .setDescription('Role for option 4')
+        .setRequired(true)
+    )
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -149,6 +197,42 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({ content: 'error', ephemeral: true });
     }
   }
+
+  if (interaction.commandName === 'memberroles') {
+    const customText = interaction.options.getString('text') || 'Choose your roles:';
+
+    const options = [];
+    for (let i = 1; i <= 4; i++) {
+      const emoji = interaction.options.getString(`emoji${i}`);
+      const role = interaction.options.getRole(`role${i}`);
+      options.push({ emoji, role });
+    }
+
+    // Prepare embed
+    let description = `${customText}\n\n`;
+    options.forEach(opt => {
+      description += `${opt.emoji} → ${opt.role}\n`;
+    });
+
+    const embed = {
+      color: 0x00ff00,
+      title: 'Member Roles',
+      description
+    };
+
+    const message = await interaction.channel.send({ embeds: [embed] });
+
+    // Add reactions
+    for (const opt of options) {
+      await message.react(opt.emoji).catch(err => console.error('Invalid emoji:', opt.emoji, err));
+    }
+
+    // Store mappings
+    if (!global.roleMappings) global.roleMappings = {};
+    global.roleMappings[message.id] = options;
+
+    await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
+  }
 });
 
 // --- Birthday Check ---
@@ -175,31 +259,37 @@ const checkBirthdays = async () => {
   }
 };
 
-// --- Reaction Roles ---
+// --- Reaction Role Events ---
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (reaction.partial) await reaction.fetch();
-  const roleMap = {
-    '✅': 'ROLE_ID_1',
-    '❌': 'ROLE_ID_2'
-  };
-  const roleId = roleMap[reaction.emoji.name];
-  if (!roleId) return;
+  if (user.bot) return;
+
+  const mapping = global.roleMappings?.[reaction.message.id];
+  if (!mapping) return;
+
+  const opt = mapping.find(opt => 
+    opt.emoji === reaction.emoji.name || opt.emoji === `<:${reaction.emoji.name}:${reaction.emoji.id}>`
+  );
+  if (!opt) return;
 
   const member = await reaction.message.guild.members.fetch(user.id);
-  member.roles.add(roleId).catch(() => {});
+  member.roles.add(opt.role).catch(console.error);
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (reaction.partial) await reaction.fetch();
-  const roleMap = {
-    '✅': 'ROLE_ID_1',
-    '❌': 'ROLE_ID_2'
-  };
-  const roleId = roleMap[reaction.emoji.name];
-  if (!roleId) return;
+  if (user.bot) return;
+
+  const mapping = global.roleMappings?.[reaction.message.id];
+  if (!mapping) return;
+
+  const opt = mapping.find(opt => 
+    opt.emoji === reaction.emoji.name || opt.emoji === `<:${reaction.emoji.name}:${reaction.emoji.id}>`
+  );
+  if (!opt) return;
 
   const member = await reaction.message.guild.members.fetch(user.id);
-  member.roles.remove(roleId).catch(() => {});
+  member.roles.remove(opt.role).catch(console.error);
 });
 
 // --- Welcome Message ---
