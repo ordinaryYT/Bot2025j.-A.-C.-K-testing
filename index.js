@@ -184,9 +184,9 @@ client.on('interactionCreate', async interaction => {
         `, [message.id, emoji2, role2]);
       }
 
-      await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
+      await interaction.reply({ content: 'created', ephemeral: true });
     } catch (error) {
-      console.error('Reaction setup error:', error);
+      console.error(' error', error);
       await interaction.reply({ content: 'error', ephemeral: true });
     }
   }
