@@ -57,7 +57,7 @@ const commands = [
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
-    .setName('modifyrole')
+    .setName('modifyroles')
     .setDescription('Add or remove a role')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addStringOption(option =>
@@ -77,7 +77,7 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
-    .setName('memberroles')
+    .setName('give role')
     .setDescription('Create a reaction role message with custom emojis and roles')
     .addStringOption(option =>
       option.setName('emoji1')
