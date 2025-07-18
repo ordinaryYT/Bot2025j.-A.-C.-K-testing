@@ -69,8 +69,8 @@ const commands = [
       option.setName('roleid').setDescription('Role ID').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
-    .setName('setupreactions')
-    .setDescription('Setup a message for reaction roles')
+    .setName('reactionrole')
+    .setDescription('set a role with reaction')
     .addStringOption(option =>
       option.setName('message').setDescription('The message to display').setRequired(true))
     .addStringOption(option =>
@@ -113,15 +113,15 @@ client.on('interactionCreate', async interaction => {
         VALUES ($1, $2)
         ON CONFLICT (user_id) DO UPDATE SET birthday = EXCLUDED.birthday
       `, [interaction.user.id, dateInput]);
-      await interaction.reply(`Birthday saved: ${dateInput}`);
+      await interaction.reply(`Birthday date saved as: ${dateInput}`);
     } catch {
-      await interaction.reply({ content: 'Error saving birthday.', ephemeral: true });
+      await interaction.reply({ content: 'Error ', ephemeral: true });
     }
   }
 
   if (interaction.commandName === 'clearchannel') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You need administrator permissions.', ephemeral: true });
+      return interaction.reply({ content: 'You dont have permission.', ephemeral: true });
     }
 
     try {
@@ -129,7 +129,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.channel.bulkDelete(messages, true);
       await interaction.reply({ content: 'Messages deleted.', ephemeral: true });
     } catch {
-      await interaction.reply({ content: 'Error deleting messages.', ephemeral: true });
+      await interaction.reply({ content: 'Error', ephemeral: true });
     }
   }
 
@@ -147,16 +147,16 @@ client.on('interactionCreate', async interaction => {
         await member.roles.remove(roleId);
         await interaction.reply(`Removed role from <@${userId}>`);
       } else {
-        await interaction.reply({ content: 'Invalid action.', ephemeral: true });
+        await interaction.reply({ content: 'error', ephemeral: true });
       }
     } catch {
-      await interaction.reply({ content: 'Error modifying role.', ephemeral: true });
+      await interaction.reply({ content: 'Error', ephemeral: true });
     }
   }
 
   if (interaction.commandName === 'setupreactions') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You need admin permissions.', ephemeral: true });
+      return interaction.reply({ content: 'You dont have permission', ephemeral: true });
     }
 
     try {
@@ -187,7 +187,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
     } catch (error) {
       console.error('Reaction setup error:', error);
-      await interaction.reply({ content: 'An error occurred while setting up reaction roles.', ephemeral: true });
+      await interaction.reply({ content: 'error', ephemeral: true });
     }
   }
 });
@@ -208,10 +208,10 @@ const checkBirthdays = async () => {
 
     for (const row of res.rows) {
       const mention = `<@${row.user_id}>`;
-      channel.send(`Happy birthday ${mention}! 🎉`);
+      channel.send(`Happy birthday ${mention}! `);
     }
   } catch {
-    console.error('Error checking birthdays');
+    console.error('Error');
   }
 };
 
@@ -236,7 +236,7 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
       console.log(`Role added to ${user.tag}`);
     }
   } catch (error) {
-    console.error('Error assigning role:', error);
+    console.error('Error ', error);
   }
 });
 
@@ -268,7 +268,7 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
 client.on(Events.GuildMemberAdd, async member => {
   const channel = await client.channels.fetch(process.env.WELCOME_CHANNEL_ID);
   if (channel && channel.isTextBased()) {
-    channel.send(`Welcome to the server, <@${member.id}>! 🎉`);
+    channel.send(`Welcome to the server, <@${member.id}>! `);
   }
 });
 
