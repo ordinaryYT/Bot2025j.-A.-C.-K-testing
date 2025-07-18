@@ -56,7 +56,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('clearchannel')
-    .setDescription('Clear messages in this channel')
+    .setDescription('delete all messages in this channel')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
     .setName('modifyrole')
