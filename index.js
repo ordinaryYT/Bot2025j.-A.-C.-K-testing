@@ -59,7 +59,7 @@ const commands = [
     .setDescription('delete all messages in this channel')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
-    .setName('modifyrole')
+    .setName('addorremoverole')
     .setDescription('Add or remove a role')
     .addStringOption(option =>
       option.setName('action').setDescription('add/remove').setRequired(true))
