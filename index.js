@@ -20,6 +20,13 @@ const pool = new Pool({
         user_id TEXT PRIMARY KEY,
         birthday DATE NOT NULL
       );
+      
+      CREATE TABLE IF NOT EXISTS reaction_roles (
+        message_id TEXT,
+        emoji TEXT,
+        role_id TEXT,
+        PRIMARY KEY (message_id, emoji)
+      );
     `);
     console.log("Database initialized.");
   } catch (err) {
@@ -57,18 +64,39 @@ const commands = [
     .addStringOption(option =>
       option.setName('action')
         .setDescription('add/remove')
-        .setRequired(true)
-    )
+        .setRequired(true))
     .addStringOption(option =>
       option.setName('userid')
         .setDescription('users id')
-        .setRequired(true)
-    )
+        .setRequired(true))
     .addStringOption(option =>
       option.setName('roleid')
         .setDescription('Role ID')
-        .setRequired(true)
-    )
+        .setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName('setupreactions')
+    .setDescription('Setup a message for reaction roles')
+    .addStringOption(option =>
+      option.setName('message')
+        .setDescription('The message to display')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('emoji1')
+        .setDescription('First emoji')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('role1')
+        .setDescription('Role ID for first emoji')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('emoji2')
+        .setDescription('Second emoji')
+        .setRequired(false))
+    .addStringOption(option =>
+      option.setName('role2')
+        .setDescription('Role ID for second emoji')
+        .setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
@@ -94,12 +122,12 @@ client.on('interactionCreate', async interaction => {
     const requiredRoleId = process.env.BIRTHDAY_ROLE_ID;
 
     if (!member.roles.cache.has(requiredRoleId)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'You need the birthday role to use this command.', ephemeral: true });
     }
 
     const dateInput = interaction.options.getString('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'Invalid date format. Please use YYYY-MM-DD.', ephemeral: true });
     }
 
     try {
@@ -111,13 +139,13 @@ client.on('interactionCreate', async interaction => {
       );
       await interaction.reply(`Birthday saved: ${dateInput}`);
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Error saving birthday.', ephemeral: true });
     }
   }
 
   if (interaction.commandName === 'clearchannel') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'error', ephemeral: true });
+      return interaction.reply({ content: 'You need administrator permissions to use this command.', ephemeral: true });
     }
 
     try {
@@ -125,7 +153,7 @@ client.on('interactionCreate', async interaction => {
       await interaction.channel.bulkDelete(messages, true);
       await interaction.reply({ content: 'Messages deleted.', ephemeral: true });
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Error deleting messages.', ephemeral: true });
     }
   }
 
@@ -143,10 +171,42 @@ client.on('interactionCreate', async interaction => {
         await member.roles.remove(roleId);
         await interaction.reply(`Removed role from <@${userId}>`);
       } else {
-        await interaction.reply({ content: 'error', ephemeral: true });
+        await interaction.reply({ content: 'Invalid action. Use "add" or "remove".', ephemeral: true });
       }
     } catch {
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Error modifying role.', ephemeral: true });
+    }
+  }
+
+  if (interaction.commandName === 'setupreactions') {
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: 'You need administrator permissions to use this command.', ephemeral: true });
+    }
+
+    try {
+      const messageText = interaction.options.getString('message');
+      const emoji1 = interaction.options.getString('emoji1');
+      const role1 = interaction.options.getString('role1');
+      const emoji2 = interaction.options.getString('emoji2');
+      const role2 = interaction.options.getString('role2');
+
+      const message = await interaction.channel.send(messageText);
+      
+      await message.react(emoji1);
+      if (emoji2 && role2) await message.react(emoji2);
+
+      // Store the reaction role mapping in your database
+      await pool.query(`
+        INSERT INTO reaction_roles (message_id, emoji, role_id)
+        VALUES ($1, $2, $3),
+               ($1, $4, $5)
+        ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id
+      `, [message.id, emoji1, role1, emoji2, role2]);
+
+      await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
+    } catch (error) {
+      console.error('Error setting up reaction roles:', error);
+      await interaction.reply({ content: 'An error occurred while setting up reaction roles.', ephemeral: true });
     }
   }
 });
@@ -168,38 +228,50 @@ const checkBirthdays = async () => {
 
     for (const row of res.rows) {
       const mention = `<@${row.user_id}>`;
-      channel.send(`Happy birthday ${mention}! `);
+      channel.send(`Happy birthday ${mention}! 🎉`);
     }
   } catch {
-    console.error('error');
+    console.error('Error checking birthdays');
   }
 };
 
 // --- Reaction Roles ---
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (user.bot) return;
   if (reaction.partial) await reaction.fetch();
-  const roleMap = {
-    '✅': 'ROLE_ID_1',
-    '❌': 'ROLE_ID_2'
-  };
-  const roleId = roleMap[reaction.emoji.name];
-  if (!roleId) return;
 
-  const member = await reaction.message.guild.members.fetch(user.id);
-  member.roles.add(roleId).catch(() => {});
+  try {
+    const res = await pool.query(
+      'SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2',
+      [reaction.message.id, reaction.emoji.name || reaction.emoji.id]
+    );
+
+    if (res.rows.length > 0) {
+      const member = await reaction.message.guild.members.fetch(user.id);
+      await member.roles.add(res.rows[0].role_id);
+    }
+  } catch (error) {
+    console.error('Error adding role:', error);
+  }
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (user.bot) return;
   if (reaction.partial) await reaction.fetch();
-  const roleMap = {
-    '✅': 'ROLE_ID_1',
-    '❌': 'ROLE_ID_2'
-  };
-  const roleId = roleMap[reaction.emoji.name];
-  if (!roleId) return;
 
-  const member = await reaction.message.guild.members.fetch(user.id);
-  member.roles.remove(roleId).catch(() => {});
+  try {
+    const res = await pool.query(
+      'SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2',
+      [reaction.message.id, reaction.emoji.name || reaction.emoji.id]
+    );
+
+    if (res.rows.length > 0) {
+      const member = await reaction.message.guild.members.fetch(user.id);
+      await member.roles.remove(res.rows[0].role_id);
+    }
+  } catch (error) {
+    console.error('Error removing role:', error);
+  }
 });
 
 // --- Welcome Message ---
