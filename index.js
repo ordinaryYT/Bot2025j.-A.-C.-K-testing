@@ -62,41 +62,25 @@ const commands = [
     .setName('modifyrole')
     .setDescription('Add or remove a role')
     .addStringOption(option =>
-      option.setName('action')
-        .setDescription('add/remove')
-        .setRequired(true))
+      option.setName('action').setDescription('add/remove').setRequired(true))
     .addStringOption(option =>
-      option.setName('userid')
-        .setDescription('users id')
-        .setRequired(true))
+      option.setName('userid').setDescription('User ID').setRequired(true))
     .addStringOption(option =>
-      option.setName('roleid')
-        .setDescription('Role ID')
-        .setRequired(true))
+      option.setName('roleid').setDescription('Role ID').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
     .setName('setupreactions')
     .setDescription('Setup a message for reaction roles')
     .addStringOption(option =>
-      option.setName('message')
-        .setDescription('The message to display')
-        .setRequired(true))
+      option.setName('message').setDescription('The message to display').setRequired(true))
     .addStringOption(option =>
-      option.setName('emoji1')
-        .setDescription('First emoji')
-        .setRequired(true))
+      option.setName('emoji1').setDescription('First emoji').setRequired(true))
     .addStringOption(option =>
-      option.setName('role1')
-        .setDescription('Role ID for first emoji')
-        .setRequired(true))
+      option.setName('role1').setDescription('Role ID for first emoji').setRequired(true))
     .addStringOption(option =>
-      option.setName('emoji2')
-        .setDescription('Second emoji')
-        .setRequired(false))
+      option.setName('emoji2').setDescription('Second emoji').setRequired(false))
     .addStringOption(option =>
-      option.setName('role2')
-        .setDescription('Role ID for second emoji')
-        .setRequired(false))
+      option.setName('role2').setDescription('Role ID for second emoji').setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(cmd => cmd.toJSON());
 
@@ -118,25 +102,17 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'setbirthday') {
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const requiredRoleId = process.env.BIRTHDAY_ROLE_ID;
-
-    if (!member.roles.cache.has(requiredRoleId)) {
-      return interaction.reply({ content: 'You need the birthday role to use this command.', ephemeral: true });
-    }
-
     const dateInput = interaction.options.getString('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return interaction.reply({ content: 'Invalid date format. Please use YYYY-MM-DD.', ephemeral: true });
+      return interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', ephemeral: true });
     }
 
     try {
-      await pool.query(
-        `INSERT INTO birthdays (user_id, birthday)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET birthday = EXCLUDED.birthday`,
-        [interaction.user.id, dateInput]
-      );
+      await pool.query(`
+        INSERT INTO birthdays (user_id, birthday)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id) DO UPDATE SET birthday = EXCLUDED.birthday
+      `, [interaction.user.id, dateInput]);
       await interaction.reply(`Birthday saved: ${dateInput}`);
     } catch {
       await interaction.reply({ content: 'Error saving birthday.', ephemeral: true });
@@ -145,7 +121,7 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.commandName === 'clearchannel') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You need administrator permissions to use this command.', ephemeral: true });
+      return interaction.reply({ content: 'You need administrator permissions.', ephemeral: true });
     }
 
     try {
@@ -171,7 +147,7 @@ client.on('interactionCreate', async interaction => {
         await member.roles.remove(roleId);
         await interaction.reply(`Removed role from <@${userId}>`);
       } else {
-        await interaction.reply({ content: 'Invalid action. Use "add" or "remove".', ephemeral: true });
+        await interaction.reply({ content: 'Invalid action.', ephemeral: true });
       }
     } catch {
       await interaction.reply({ content: 'Error modifying role.', ephemeral: true });
@@ -180,7 +156,7 @@ client.on('interactionCreate', async interaction => {
 
   if (interaction.commandName === 'setupreactions') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You need administrator permissions to use this command.', ephemeral: true });
+      return interaction.reply({ content: 'You need admin permissions.', ephemeral: true });
     }
 
     try {
@@ -191,21 +167,26 @@ client.on('interactionCreate', async interaction => {
       const role2 = interaction.options.getString('role2');
 
       const message = await interaction.channel.send(messageText);
-      
       await message.react(emoji1);
       if (emoji2 && role2) await message.react(emoji2);
 
-      // Store the reaction role mapping in your database
       await pool.query(`
         INSERT INTO reaction_roles (message_id, emoji, role_id)
-        VALUES ($1, $2, $3),
-               ($1, $4, $5)
+        VALUES ($1, $2, $3)
         ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id
-      `, [message.id, emoji1, role1, emoji2, role2]);
+      `, [message.id, emoji1, role1]);
+
+      if (emoji2 && role2) {
+        await pool.query(`
+          INSERT INTO reaction_roles (message_id, emoji, role_id)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id
+        `, [message.id, emoji2, role2]);
+      }
 
       await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
     } catch (error) {
-      console.error('Error setting up reaction roles:', error);
+      console.error('Reaction setup error:', error);
       await interaction.reply({ content: 'An error occurred while setting up reaction roles.', ephemeral: true });
     }
   }
@@ -214,7 +195,6 @@ client.on('interactionCreate', async interaction => {
 // --- Birthday Check ---
 const checkBirthdays = async () => {
   const today = new Date().toISOString().slice(5, 10); // MM-DD
-
   try {
     const res = await pool.query(`
       SELECT user_id FROM birthdays
@@ -238,36 +218,46 @@ const checkBirthdays = async () => {
 // --- Reaction Roles ---
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
-  if (reaction.partial) await reaction.fetch();
 
   try {
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+
+    const emojiKey = reaction.emoji.name;
+
     const res = await pool.query(
       'SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2',
-      [reaction.message.id, reaction.emoji.name || reaction.emoji.id]
+      [reaction.message.id, emojiKey]
     );
 
     if (res.rows.length > 0) {
       const member = await reaction.message.guild.members.fetch(user.id);
       await member.roles.add(res.rows[0].role_id);
+      console.log(`Role added to ${user.tag}`);
     }
   } catch (error) {
-    console.error('Error adding role:', error);
+    console.error('Error assigning role:', error);
   }
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (user.bot) return;
-  if (reaction.partial) await reaction.fetch();
 
   try {
+    if (reaction.partial) await reaction.fetch();
+    if (reaction.message.partial) await reaction.message.fetch();
+
+    const emojiKey = reaction.emoji.name;
+
     const res = await pool.query(
       'SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2',
-      [reaction.message.id, reaction.emoji.name || reaction.emoji.id]
+      [reaction.message.id, emojiKey]
     );
 
     if (res.rows.length > 0) {
       const member = await reaction.message.guild.members.fetch(user.id);
       await member.roles.remove(res.rows[0].role_id);
+      console.log(`Role removed from ${user.tag}`);
     }
   } catch (error) {
     console.error('Error removing role:', error);
@@ -288,12 +278,7 @@ client.on('ready', () => {
   checkBirthdays();
 
   const now = new Date();
-  const millisUntilMidnight = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() + 1
-  ).getTime() - now.getTime();
-
+  const millisUntilMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
   setTimeout(() => {
     checkBirthdays();
     setInterval(checkBirthdays, 24 * 60 * 60 * 1000);
