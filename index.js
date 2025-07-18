@@ -1,3 +1,129 @@
+require('dotenv').config();
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, Events, Partials } = require('discord.js');
+const express = require('express');
+const { Pool } = require('pg');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (_, res) => res.send('Bot is running.'));
+app.listen(PORT, () => console.log(`Listening on port ${PORT}`));
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS birthdays (
+        user_id TEXT PRIMARY KEY,
+        birthday DATE NOT NULL
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS reaction_roles (
+        message_id TEXT,
+        emoji TEXT,
+        role_id TEXT,
+        PRIMARY KEY (message_id, emoji)
+      );
+    `);
+    console.log("Database initialized.");
+  } catch (err) {
+    console.error("Error initializing database:", err);
+  }
+})();
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.MessageContent
+  ],
+  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+});
+
+// Slash commands with up to 10 emoji-role pairs (only emoji1-role1 required for memberroles)
+const commands = [
+  new SlashCommandBuilder()
+    .setName('setbirthday')
+    .setDescription('Set your birthday')
+    .addStringOption(option =>
+      option.setName('date')
+        .setDescription('Birthday (YYYY-MM-DD)')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('clearchannel')
+    .setDescription('Clear messages in this channel')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
+    .setName('modifyrole')
+    .setDescription('Add or remove a role')
+    .addStringOption(option =>
+      option.setName('action')
+        .setDescription('add or remove')
+        .setRequired(true)
+        .addChoices(
+          { name: 'add', value: 'add' },
+          { name: 'remove', value: 'remove' }
+        )
+    )
+    .addStringOption(option =>
+      option.setName('userid')
+        .setDescription('User ID')
+        .setRequired(true)
+    )
+    .addStringOption(option =>
+      option.setName('roleid')
+        .setDescription('Role ID')
+        .setRequired(true)
+    )
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  (() => {
+    const cmd = new SlashCommandBuilder()
+      .setName('memberroles')
+      .setDescription('Create a reaction role message with custom emojis and roles')
+      .addStringOption(option =>
+        option.setName('text')
+          .setDescription('Custom text for the message')
+          .setRequired(false)
+      );
+    // Add up to 10 emoji-role pairs
+    for (let i = 1; i <= 10; i++) {
+      cmd.addStringOption(opt =>
+        opt.setName(`emoji${i}`)
+          .setDescription(`Emoji for option ${i}`)
+          .setRequired(i === 1) // only first emoji is required
+      );
+      cmd.addRoleOption(opt =>
+        opt.setName(`role${i}`)
+          .setDescription(`Role for option ${i}`)
+          .setRequired(i === 1)
+      );
+    }
+    return cmd;
+  })()
+].map(cmd => cmd.toJSON());
+
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+(async () => {
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+      { body: commands }
+    );
+    console.log("Slash commands registered.");
+  } catch (err) {
+    console.error("Failed to register commands:", err);
+  }
+})();
+
+// Interaction Handler
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -73,6 +199,7 @@ client.on('interactionCreate', async interaction => {
 
       const message = await interaction.channel.send({ embeds: [embed] });
 
+      // Delete any old reaction_roles for this message id (should be none)
       await pool.query(`DELETE FROM reaction_roles WHERE message_id = $1`, [message.id]);
 
       for (const p of pairs) {
@@ -85,12 +212,11 @@ client.on('interactionCreate', async interaction => {
         try {
           await message.react(p.emoji);
         } catch {
-          // ignore reaction errors silently
+          // ignore invalid emoji react errors
         }
       }
 
       await interaction.reply({ content: 'Reaction role message created!', ephemeral: true });
-
     }
   } catch {
     console.error('error');
@@ -99,3 +225,96 @@ client.on('interactionCreate', async interaction => {
     }
   }
 });
+
+// Birthday check
+const checkBirthdays = async () => {
+  const today = new Date().toISOString().slice(5, 10); // MM-DD
+
+  try {
+    const res = await pool.query(`
+      SELECT user_id FROM birthdays
+      WHERE TO_CHAR(birthday, 'MM-DD') = $1
+    `, [today]);
+
+    if (res.rows.length === 0) return;
+
+    const channel = await client.channels.fetch(process.env.BIRTHDAY_CHANNEL_ID);
+    if (!channel || !channel.isTextBased()) return;
+
+    for (const row of res.rows) {
+      const mention = `<@${row.user_id}>`;
+      channel.send(`Happy birthday ${mention}! 🎉`);
+    }
+  } catch {
+    console.error('error');
+  }
+};
+
+// Reaction role events
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+  if (user.bot) return;
+
+  try {
+    const res = await pool.query(
+      `SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2`,
+      [reaction.message.id, reaction.emoji.identifier || reaction.emoji.name]
+    );
+
+    if (res.rows.length === 0) return;
+
+    const roleId = res.rows[0].role_id;
+    const member = await reaction.message.guild.members.fetch(user.id);
+    await member.roles.add(roleId);
+  } catch {
+    // ignore errors silently
+  }
+});
+
+client.on(Events.MessageReactionRemove, async (reaction, user) => {
+  if (reaction.partial) await reaction.fetch();
+  if (user.bot) return;
+
+  try {
+    const res = await pool.query(
+      `SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji = $2`,
+      [reaction.message.id, reaction.emoji.identifier || reaction.emoji.name]
+    );
+
+    if (res.rows.length === 0) return;
+
+    const roleId = res.rows[0].role_id;
+    const member = await reaction.message.guild.members.fetch(user.id);
+    await member.roles.remove(roleId);
+  } catch {
+    // ignore errors silently
+  }
+});
+
+// Welcome message
+client.on(Events.GuildMemberAdd, async member => {
+  const channel = await client.channels.fetch(process.env.WELCOME_CHANNEL_ID);
+  if (channel && channel.isTextBased()) {
+    channel.send(`Welcome to the server, <@${member.id}>! 🎉`);
+  }
+});
+
+// Bot ready & birthday check schedule
+client.on('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  checkBirthdays();
+
+  const now = new Date();
+  const millisUntilMidnight = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1
+  ).getTime() - now.getTime();
+
+  setTimeout(() => {
+    checkBirthdays();
+    setInterval(checkBirthdays, 24 * 60 * 60 * 1000);
+  }, millisUntilMidnight);
+});
+
+client.login(process.env.DISCORD_TOKEN);
