@@ -10,6 +10,8 @@
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "axios": "^1.6.8",
+    "tiktok-live-connector": "^2.0.5"
   }
 }
