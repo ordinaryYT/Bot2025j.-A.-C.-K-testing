@@ -2,6 +2,8 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, Events, Partials } = require('discord.js');
 const express = require('express');
 const { Pool } = require('pg');
+const axios = require('axios');
+const { WebcastPushConnection } = require('tiktok-live-connector');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,12 +18,14 @@ const pool = new Pool({
 (async () => {
   try {
     await pool.query(`
+      DROP TABLE IF EXISTS reaction_roles;
+      
       CREATE TABLE IF NOT EXISTS birthdays (
         user_id TEXT PRIMARY KEY,
         birthday DATE NOT NULL
       );
       
-      CREATE TABLE IF NOT EXISTS reaction_roles (
+      CREATE TABLE reaction_roles (
         message_id TEXT,
         emoji TEXT,
         role_id TEXT,
@@ -50,10 +54,7 @@ const commands = [
     .setName('setbirthday')
     .setDescription('Set your birthday')
     .addStringOption(option =>
-      option.setName('date')
-        .setDescription('Birthday (YYYY-MM-DD)')
-        .setRequired(true)
-    ),
+      option.setName('date').setDescription('Birthday (YYYY-MM-DD)').setRequired(true)),
   new SlashCommandBuilder()
     .setName('clearchannel')
     .setDescription('delete all messages in this channel')
@@ -61,27 +62,14 @@ const commands = [
   new SlashCommandBuilder()
     .setName('addorremoverole')
     .setDescription('Add or remove a role')
-    .addStringOption(option =>
-      option.setName('action').setDescription('add/remove').setRequired(true))
-    .addStringOption(option =>
-      option.setName('userid').setDescription('User ID').setRequired(true))
-    .addStringOption(option =>
-      option.setName('roleid').setDescription('Role ID').setRequired(true))
+    .addStringOption(option => option.setName('action').setDescription('add/remove').setRequired(true))
+    .addStringOption(option => option.setName('userid').setDescription('User ID').setRequired(true))
+    .addStringOption(option => option.setName('roleid').setDescription('Role ID').setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
     .setName('reactionrole')
     .setDescription('set a role with reaction')
-    .addStringOption(option =>
-      option.setName('message').setDescription('The message to display').setRequired(true))
-    .addStringOption(option =>
-      option.setName('emoji1').setDescription('First emoji').setRequired(true))
-    .addStringOption(option =>
-      option.setName('role1').setDescription('Role ID for first emoji').setRequired(true))
-    .addStringOption(option =>
-      option.setName('emoji2').setDescription('Second emoji').setRequired(false))
-    .addStringOption(option =>
-      option.setName('role2').setDescription('Role ID for second emoji').setRequired(false))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addStringOption(option => option.setName('message').setDescription('The message to display').setRequired(true))
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -97,14 +85,13 @@ const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   }
 })();
 
-// --- Slash Command Handler ---
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'setbirthday') {
     const dateInput = interaction.options.getString('date');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
-      return interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', ephemeral: true });
+      return interaction.reply({ content: 'Invalid date format. Use YYYY-MM-DD.', flags: 64 });
     }
 
     try {
@@ -113,27 +100,27 @@ client.on('interactionCreate', async interaction => {
         VALUES ($1, $2)
         ON CONFLICT (user_id) DO UPDATE SET birthday = EXCLUDED.birthday
       `, [interaction.user.id, dateInput]);
-      await interaction.reply(`Birthday date saved as: ${dateInput}`);
+      await interaction.reply({ content: `Birthday date saved as: ${dateInput}`, flags: 64 });
     } catch {
-      await interaction.reply({ content: 'Error ', ephemeral: true });
+      await interaction.reply({ content: 'Error saving birthday.', flags: 64 });
     }
   }
 
   if (interaction.commandName === 'clearchannel') {
     if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You dont have permission.', ephemeral: true });
+      return interaction.reply({ content: 'You don’t have permission.', flags: 64 });
     }
 
     try {
       const messages = await interaction.channel.messages.fetch({ limit: 100 });
       await interaction.channel.bulkDelete(messages, true);
-      await interaction.reply({ content: 'Messages deleted.', ephemeral: true });
+      await interaction.reply({ content: 'Messages deleted.', flags: 64 });
     } catch {
-      await interaction.reply({ content: 'Error', ephemeral: true });
+      await interaction.reply({ content: 'Error clearing messages.', flags: 64 });
     }
   }
 
-  if (interaction.commandName === 'modifyrole') {
+  if (interaction.commandName === 'addorremoverole') {
     const action = interaction.options.getString('action');
     const userId = interaction.options.getString('userid');
     const roleId = interaction.options.getString('roleid');
@@ -147,78 +134,16 @@ client.on('interactionCreate', async interaction => {
         await member.roles.remove(roleId);
         await interaction.reply(`Removed role from <@${userId}>`);
       } else {
-        await interaction.reply({ content: 'error', ephemeral: true });
+        await interaction.reply({ content: 'Invalid action.', flags: 64 });
       }
     } catch {
-      await interaction.reply({ content: 'Error', ephemeral: true });
-    }
-  }
-
-  if (interaction.commandName === 'setupreactions') {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'You dont have permission', ephemeral: true });
-    }
-
-    try {
-      const messageText = interaction.options.getString('message');
-      const emoji1 = interaction.options.getString('emoji1');
-      const role1 = interaction.options.getString('role1');
-      const emoji2 = interaction.options.getString('emoji2');
-      const role2 = interaction.options.getString('role2');
-
-      const message = await interaction.channel.send(messageText);
-      await message.react(emoji1);
-      if (emoji2 && role2) await message.react(emoji2);
-
-      await pool.query(`
-        INSERT INTO reaction_roles (message_id, emoji, role_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id
-      `, [message.id, emoji1, role1]);
-
-      if (emoji2 && role2) {
-        await pool.query(`
-          INSERT INTO reaction_roles (message_id, emoji, role_id)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (message_id, emoji) DO UPDATE SET role_id = EXCLUDED.role_id
-        `, [message.id, emoji2, role2]);
-      }
-
-      await interaction.reply({ content: 'created', ephemeral: true });
-    } catch (error) {
-      console.error(' error', error);
-      await interaction.reply({ content: 'error', ephemeral: true });
+      await interaction.reply({ content: 'Error modifying role.', flags: 64 });
     }
   }
 });
 
-// --- Birthday Check ---
-const checkBirthdays = async () => {
-  const today = new Date().toISOString().slice(5, 10); // MM-DD
-  try {
-    const res = await pool.query(`
-      SELECT user_id FROM birthdays
-      WHERE TO_CHAR(birthday, 'MM-DD') = $1
-    `, [today]);
-
-    if (res.rows.length === 0) return;
-
-    const channel = await client.channels.fetch(process.env.BIRTHDAY_CHANNEL_ID);
-    if (!channel || !channel.isTextBased()) return;
-
-    for (const row of res.rows) {
-      const mention = `<@${row.user_id}>`;
-      channel.send(`Happy birthday ${mention}! `);
-    }
-  } catch {
-    console.error('Error');
-  }
-};
-
-// --- Reaction Roles ---
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
-
   try {
     if (reaction.partial) await reaction.fetch();
     if (reaction.message.partial) await reaction.message.fetch();
@@ -233,16 +158,14 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
     if (res.rows.length > 0) {
       const member = await reaction.message.guild.members.fetch(user.id);
       await member.roles.add(res.rows[0].role_id);
-      console.log(`Role added to ${user.tag}`);
     }
   } catch (error) {
-    console.error('Error ', error);
+    console.error('Error assigning role:', error);
   }
 });
 
 client.on(Events.MessageReactionRemove, async (reaction, user) => {
   if (user.bot) return;
-
   try {
     if (reaction.partial) await reaction.fetch();
     if (reaction.message.partial) await reaction.message.fetch();
@@ -257,32 +180,71 @@ client.on(Events.MessageReactionRemove, async (reaction, user) => {
     if (res.rows.length > 0) {
       const member = await reaction.message.guild.members.fetch(user.id);
       await member.roles.remove(res.rows[0].role_id);
-      console.log(`Role removed from ${user.tag}`);
     }
   } catch (error) {
     console.error('Error removing role:', error);
   }
 });
 
-// --- Welcome Message ---
 client.on(Events.GuildMemberAdd, async member => {
   const channel = await client.channels.fetch(process.env.WELCOME_CHANNEL_ID);
   if (channel && channel.isTextBased()) {
-    channel.send(`Welcome to the server, <@${member.id}>! `);
+    channel.send(`Welcome to the server, <@${member.id}>!`);
   }
 });
 
-// --- Bot Ready ---
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
-  checkBirthdays();
-
-  const now = new Date();
-  const millisUntilMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
-  setTimeout(() => {
-    checkBirthdays();
-    setInterval(checkBirthdays, 24 * 60 * 60 * 1000);
-  }, millisUntilMidnight);
 });
+
+// --- Twitch (Simplified - No Token Required) ---
+const checkTwitchLiveSimple = async (username) => {
+  try {
+    const res = await axios.get(`https://decapi.me/twitch/status/${username}`);
+    const text = res.data.toLowerCase();
+
+    if (!checkTwitchLiveSimple._liveUsers) checkTwitchLiveSimple._liveUsers = new Set();
+
+    const isLive = !text.includes("offline");
+    const alreadyAnnounced = checkTwitchLiveSimple._liveUsers.has(username);
+
+    if (isLive && !alreadyAnnounced) {
+      const channel = await client.channels.fetch(process.env.NOTIFICATION_CHANNEL_ID);
+      channel.send(` **${username}** is now live on Twitch! → https://twitch.tv/${username}`);
+      checkTwitchLiveSimple._liveUsers.add(username);
+    } else if (!isLive && alreadyAnnounced) {
+      checkTwitchLiveSimple._liveUsers.delete(username);
+    }
+
+  } catch (err) {
+    console.error(`[Twitch] Error checking ${username}:`, err.message);
+  }
+};
+
+const TWITCH_USERS = (process.env.TWITCH_USERS || '').split(',');
+setInterval(() => {
+  for (const user of TWITCH_USERS) {
+    if (user) checkTwitchLiveSimple(user.trim().toLowerCase());
+  }
+}, 60000);
+
+// --- TikTok ---
+const TIKTOK_USERS = (process.env.TIKTOK_USERS || '').split(',');
+for (const username of TIKTOK_USERS) {
+  if (!username) continue;
+
+  const tiktokLive = new WebcastPushConnection(username.trim());
+
+  tiktokLive.connect().then(() => {
+    console.log(`[TikTok] Monitoring ${username.trim()}`);
+  }).catch(err => {
+    console.error(`[TikTok] Connection error: ${username.trim()}`, err);
+  });
+
+  tiktokLive.on('streamStart', async () => {
+    const channel = await client.channels.fetch(process.env.NOTIFICATION_CHANNEL_ID);
+    channel.send(` **${username.trim()}** is now LIVE on TikTok! https://tiktok.com/@${username.trim()}/live`);
+  });
+}
 
 client.login(process.env.DISCORD_TOKEN);
